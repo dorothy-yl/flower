@@ -1,120 +1,87 @@
-# 简单Express服务器
+# Flower Express Server
 
-这是一个最简单的Express服务器示例，包含GET和POST请求。
+一个基于Express的服务器，提供微信小程序登录等API接口。
 
 ## 功能特性
 
-- GET请求：获取用户列表和特定用户信息
-- POST请求：创建新用户和用户登录
-- JSON响应格式
-- 基本的错误处理
+- 微信小程序登录接口
+- 用户管理API
+- JWT token认证
 
-## 安装和运行
+## 安装依赖
 
-### 1. 安装依赖
 ```bash
 npm install
 ```
 
-### 2. 启动服务器
+## 配置
+
+### 方法1: 使用环境变量
+
+在启动服务器前设置环境变量：
+
 ```bash
+# Windows PowerShell
+$env:WECHAT_APPID="你的微信APPID"
+$env:WECHAT_SECRET="你的微信SECRET"
+$env:JWT_SECRET="你的JWT密钥"
+
+# Windows CMD
+set WECHAT_APPID=你的微信APPID
+set WECHAT_SECRET=你的微信SECRET
+set JWT_SECRET=你的JWT密钥
+
+# Linux/Mac
+export WECHAT_APPID=你的微信APPID
+export WECHAT_SECRET=你的微信SECRET
+export JWT_SECRET=你的JWT密钥
+```
+
+### 方法2: 修改配置文件
+
+直接编辑 `config.js` 文件中的默认值。
+
+## 启动服务器
+
+```bash
+# 开发模式
+npm run dev
+
 # 生产模式
 npm start
-
-# 开发模式（自动重启）
-npm run dev
 ```
 
-服务器将在 http://localhost:3000 启动
+## API接口
 
-## API端点
-
-### GET请求
-
-#### 获取所有用户
-```
-GET /api/users
-```
-
-响应示例：
+### 微信登录
+- **路径**: `GET /weixin/wxLogin/:code`
+- **参数**: `code` - 微信小程序登录凭证
+- **返回**: 
 ```json
 {
-  "success": true,
-  "message": "获取用户列表成功",
-  "data": [
-    {
-      "id": 1,
-      "name": "张三",
-      "email": "zhangsan@example.com"
-    }
-  ]
+  "code": 200,
+  "data": {
+    "token": "JWT token"
+  },
+  "message": "成功"
 }
 ```
 
-#### 获取特定用户
-```
-GET /api/users/:id
-```
+### 其他接口
+- `GET /api/users` - 获取用户列表
+- `POST /api/users` - 创建用户
+- `POST /api/login` - 用户登录
 
-### POST请求
+## 测试
 
-#### 创建新用户
-```
-POST /api/users
-Content-Type: application/json
-
-{
-  "name": "新用户",
-  "email": "newuser@example.com"
-}
-```
-
-#### 用户登录
-```
-POST /api/login
-Content-Type: application/json
-
-{
-  "username": "admin",
-  "password": "123456"
-}
-```
-
-## 测试API
-
-你可以使用以下工具测试API：
-
-### 使用curl
+使用curl测试微信登录接口：
 
 ```bash
-# 获取所有用户
-curl http://localhost:3000/api/users
-
-# 获取特定用户
-curl http://localhost:3000/api/users/1
-
-# 创建新用户
-curl -X POST http://localhost:3000/api/users \
-  -H "Content-Type: application/json" \
-  -d '{"name": "测试用户", "email": "test@example.com"}'
-
-# 用户登录
-curl -X POST http://localhost:3000/api/login \
-  -H "Content-Type: application/json" \
-  -d '{"username": "admin", "password": "123456"}'
+curl -X GET "http://localhost:3000/weixin/wxLogin/123456789"
 ```
 
-### 使用Postman或其他API测试工具
+## 注意事项
 
-1. 导入上述API端点
-2. 设置正确的Content-Type头部
-3. 发送请求并查看响应
-
-## 项目结构
-
-```
-flower/
-├── package.json      # 项目配置和依赖
-├── server.js         # 主服务器文件
-└── README.md         # 项目说明
-``` 
+- 请确保微信APPID和SECRET的安全性
+- 生产环境建议使用环境变量而不是硬编码
+- JWT密钥应该足够复杂且保密 
