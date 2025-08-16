@@ -7,15 +7,267 @@ const PORT = config.server.port;
 const jwt = require('jwt-simple');
 const SECRET = config.jwt.secret;
 
+// 引入multer用于文件上传
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
 // 微信配置 - 从配置文件获取
 const WECHAT_APPID = config.wechat.appid;
 const WECHAT_SECRET = config.wechat.secret;
+
+// 确保上传目录存在
+const uploadDir = config.images.directory;
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// 配置multer存储
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, uploadDir);
+    },
+    filename: function (req, file, cb) {
+        // 生成唯一文件名：时间戳 + 随机数 + 原扩展名
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, uniqueSuffix + path.extname(file.originalname));
+    }
+});
+
+// 文件过滤器 - 只允许图片文件
+const fileFilter = (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|gif|webp/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+    
+    if (mimetype && extname) {
+        return cb(null, true);
+    } else {
+        cb(new Error('只允许上传图片文件 (jpeg, jpg, png, gif, webp)'));
+    }
+};
+
+// 配置multer
+const upload = multer({
+    storage: storage,
+    fileFilter: fileFilter,
+    limits: {
+        fileSize: 5 * 1024 * 1024, // 限制文件大小为5MB
+        files: 10 // 最多允许上传10个文件
+    }
+});
 
 //中间件：解析JSON请求体
 app.use(express.json());
 
 //中间件：解析URL编码的请求体
 app.use(express.urlencoded({ extended: true }));
+
+// 静态文件服务中间件 - 提供图片文件访问
+app.use(config.images.path, express.static(config.images.directory));
+
+// 图片上传接口 - 单张图片
+app.post('/api/upload/single', upload.single('image'), (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({
+                code: 400,
+                message: '请选择要上传的图片',
+                data: null
+            });
+        }
+
+        const imageUrl = `${req.protocol}://${req.get('host')}${config.images.path}/${req.file.filename}`;
+        
+        res.json({
+            code: 200,
+            message: '图片上传成功',
+            data: {
+                filename: req.file.filename,
+                originalname: req.file.originalname,
+                size: req.file.size,
+                mimetype: req.file.mimetype,
+                url: imageUrl
+            }
+        });
+    } catch (error) {
+        console.error('图片上传错误:', error);
+        res.status(500).json({
+            code: 500,
+            message: '服务器内部错误',
+            data: null
+        });
+    }
+});
+
+// 微信小程序专用图片上传接口
+app.post('/api/upload/wechat', upload.single('file'), (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({
+                code: 400,
+                message: '请选择要上传的图片',
+                data: null
+            });
+        }
+
+        const imageUrl = `${req.protocol}://${req.get('host')}${config.images.path}/${req.file.filename}`;
+        
+        res.json({
+            code: 200,
+            message: '图片上传成功',
+            data: {
+                filename: req.file.filename,
+                originalname: req.file.originalname,
+                size: req.file.size,
+                mimetype: req.file.mimetype,
+                url: imageUrl
+            }
+        });
+    } catch (error) {
+        console.error('微信小程序图片上传错误:', error);
+        res.status(500).json({
+            code: 500,
+            message: '服务器内部错误',
+            data: null
+        });
+    }
+});
+
+// 图片上传接口 - 多张图片
+app.post('/api/upload/multiple', upload.array('images', 10), (req, res) => {
+    try {
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({
+                code: 400,
+                message: '请选择要上传的图片',
+                data: null
+            });
+        }
+
+        const uploadedFiles = req.files.map(file => {
+            const imageUrl = `${req.protocol}://${req.get('host')}${config.images.path}/${file.filename}`;
+            return {
+                filename: file.filename,
+                originalname: file.originalname,
+                size: file.size,
+                mimetype: file.mimetype,
+                url: imageUrl
+            };
+        });
+
+        res.json({
+            code: 200,
+            message: `成功上传 ${uploadedFiles.length} 张图片`,
+            data: uploadedFiles
+        });
+    } catch (error) {
+        console.error('多图片上传错误:', error);
+        res.status(500).json({
+            code: 500,
+            message: '服务器内部错误',
+            data: null
+        });
+    }
+});
+
+// 删除图片接口
+app.delete('/api/upload/:filename', (req, res) => {
+    try {
+        const { filename } = req.params;
+        const filePath = path.join(uploadDir, filename);
+        
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({
+                code: 404,
+                message: '图片文件不存在',
+                data: null
+            });
+        }
+        
+        fs.unlinkSync(filePath);
+        
+        res.json({
+            code: 200,
+            message: '图片删除成功',
+            data: { filename }
+        });
+    } catch (error) {
+        console.error('删除图片错误:', error);
+        res.status(500).json({
+            code: 500,
+            message: '服务器内部错误',
+            data: null
+        });
+    }
+});
+
+// 获取已上传图片列表接口
+app.get('/api/upload/list', (req, res) => {
+    try {
+        const files = fs.readdirSync(uploadDir);
+        const imageFiles = files.filter(file => {
+            const ext = path.extname(file).toLowerCase();
+            return ['.jpg', '.jpeg', '.png', '.gif', '.webp'].includes(ext);
+        });
+        
+        const imageList = imageFiles.map(filename => {
+            const filePath = path.join(uploadDir, filename);
+            const stats = fs.statSync(filePath);
+            const imageUrl = `${req.protocol}://${req.get('host')}${config.images.path}/${filename}`;
+            
+            return {
+                filename,
+                url: imageUrl,
+                size: stats.size,
+                uploadTime: stats.mtime
+            };
+        });
+        
+        res.json({
+            code: 200,
+            message: '获取图片列表成功',
+            data: imageList
+        });
+    } catch (error) {
+        console.error('获取图片列表错误:', error);
+        res.status(500).json({
+            code: 500,
+            message: '服务器内部错误',
+            data: null
+        });
+    }
+});
+
+// 错误处理中间件 - 处理multer错误
+app.use((error, req, res, next) => {
+    if (error instanceof multer.MulterError) {
+        if (error.code === 'LIMIT_FILE_SIZE') {
+            return res.status(400).json({
+                code: 400,
+                message: '文件大小超过限制（最大5MB）',
+                data: null
+            });
+        }
+        if (error.code === 'LIMIT_FILE_COUNT') {
+            return res.status(400).json({
+                code: 400,
+                message: '文件数量超过限制（最多10个）',
+                data: null
+            });
+        }
+    }
+    
+    if (error.message.includes('只允许上传图片文件')) {
+        return res.status(400).json({
+            code: 400,
+            message: error.message,
+            data: null
+        });
+    }
+    
+    next(error);
+});
 
 // 微信登录接口
 app.get('/weixin/wxLogin/:code', async (req, res) => {
@@ -77,37 +329,565 @@ app.get('/weixin/wxLogin/:code', async (req, res) => {
     }
 });
 
-//GET请求路由-获取用户信息
-app.get('/index/findBanner', (req, res) => {//模拟用户数据
+// 获取微信用户信息接口
+app.get('/weixin/getuserInfo', (req, res) => {
+    try {
+        // 模拟返回微信用户信息
+        const userInfo = {
+            nickname: "汤圆",
+            headimgurl: "http://localhost:3000/assets/images/美女头像.jpg"
+        };
+        
+        res.json({
+            code: 200,
+            message: "成功",
+            data: userInfo
+        });
+        
+    } catch (error) {
+        console.error('获取微信用户信息接口错误:', error);
+        res.status(500).json({
+            code: 500,
+            message: "服务器内部错误",
+            data: null
+        });
+    }
+});
 
-    res.json({ "code": 200, "message": "成功", "data": [{ "id": 1, "createTime": "2023-02-09 14:29:49", "updateTime": "2023-11-29 08:36:49", "isDeleted": 0, "title": "情人节", "imageUrl": "http://39.98.123.211:8300/images/banner-1.png", "linkUrl": "", "sort": 1 }, { "id": 2, "createTime": "2023-02-09 14:29:59", "updateTime": "2023-11-29 08:37:53", "isDeleted": 0, "title": "送温暖", "imageUrl": "http://39.98.123.211:8300/images/banner-2.png", "linkUrl": "", "sort": 2 }, { "id": 3, "createTime": "2023-02-09 14:30:04", "updateTime": "2023-11-29 08:37:42", "isDeleted": 0, "title": "生日礼物", "imageUrl": "http://39.98.123.211:8300/images/banner-3.png", "linkUrl": "", "sort": 3 }] }
-    );
-})
+// 获取首页轮播图接口
+app.get('/index/findBanner', (req, res) => {
+    try {
+        // 模拟轮播图数据
+        const bannerData = [
+            {
+                id: 1,
+                createTime: "2023-02-09 14:29:49",
+                updateTime: "2023-11-29 08:36:49",
+                isDeleted: 0,
+                title: "情人节",
+                imageUrl: "http://39.98.123.211:8300/images/banner-1.png",
+                linkUrl: "",
+                sort: 1
+            },
+            {
+                id: 2,
+                createTime: "2023-02-09 14:29:59",
+                updateTime: "2023-11-29 08:37:53",
+                isDeleted: 0,
+                title: "送温暖",
+                imageUrl: "http://39.98.123.211:8300/images/banner-2.png",
+                linkUrl: "",
+                sort: 2
+            },
+            {
+                id: 3,
+                createTime: "2023-02-09 14:30:04",
+                updateTime: "2023-11-29 08:37:42",
+                isDeleted: 0,
+                title: "生日礼物",
+                imageUrl: "http://39.98.123.211:8300/images/banner-3.png",
+                linkUrl: "",
+                sort: 3
+            }
+        ];
+
+        res.json({
+            code: 200,
+            message: "成功",
+            data: bannerData
+        });
+
+    } catch (error) {
+        console.error('获取轮播图接口错误:', error);
+        res.status(500).json({
+            code: 500,
+            message: "服务器内部错误",
+            data: null
+        });
+    }
+});
 
 
 
-app.get('/index/findCategory1', (req, res) => {//模拟用户数据
+// 获取一级分类接口
+app.get('/index/findCategory1', (req, res) => {
+    try {
+        // 模拟一级分类数据
+        const categoryData = [
+            {
+                id: 1,
+                imageUrl: "http://39.98.123.211:8300/images/cate-1.png",
+                name: "爱礼精选"
+            },
+            {
+                id: 2,
+                imageUrl: "http://39.98.123.211:8300/images/cate-2.png",
+                name: "鲜花玫瑰"
+            },
+            {
+                id: 3,
+                imageUrl: "http://39.98.123.211:8300/images/cate-3.png",
+                name: "永生玫瑰"
+            },
+            {
+                id: 4,
+                imageUrl: "http://39.98.123.211:8300/images/cate-4.png",
+                name: "玫瑰珠宝"
+            },
+            {
+                id: 5,
+                imageUrl: "http://39.98.123.211:8300/images/cate-5.png",
+                name: "香水体护"
+            },
+            {
+                id: 6,
+                imageUrl: "http://39.98.123.211:8300/images/cate-6.png",
+                name: "玫瑰家居"
+            },
+            {
+                id: 7,
+                imageUrl: "http://39.98.123.211:8300/images/cate-7.png",
+                name: "开业花礼"
+            },
+            {
+                id: 8,
+                imageUrl: "http://39.98.123.211:8300/images/cate-8.png",
+                name: "生日祝福"
+            },
+            {
+                id: 9,
+                imageUrl: "http://39.98.123.211:8300/images/cate-9.png",
+                name: "一周一花"
+            },
+            {
+                id: 10,
+                imageUrl: "http://39.98.123.211:8300/images/cate-10.png",
+                name: "网红绿植"
+            }
+        ];
 
-    res.json({ "code": 200, "message": "成功", "data": [{ "imageUrl": "http://39.98.123.211:8300/images/cate-1.png", "name": "爱礼精选", "id": 1 }, { "imageUrl": "http://39.98.123.211:8300/images/cate-2.png", "name": "鲜花玫瑰", "id": 2 }, { "imageUrl": "http://39.98.123.211:8300/images/cate-3.png", "name": "永生玫瑰", "id": 3 }, { "imageUrl": "http://39.98.123.211:8300/images/cate-4.png", "name": "玫瑰珠宝", "id": 4 }, { "imageUrl": "http://39.98.123.211:8300/images/cate-5.png", "name": "香水体护", "id": 5 }, { "imageUrl": "http://39.98.123.211:8300/images/cate-6.png", "name": "玫瑰家居", "id": 6 }, { "imageUrl": "http://39.98.123.211:8300/images/cate-7.png", "name": "开业花礼", "id": 7 }, { "imageUrl": "http://39.98.123.211:8300/images/cate-8.png", "name": "生日祝福", "id": 8 }, { "imageUrl": "http://39.98.123.211:8300/images/cate-9.png", "name": "一周一花", "id": 9 }, { "imageUrl": "http://39.98.123.211:8300/images/cate-10.png", "name": "网红绿植", "id": 10 }] })
-})
+        res.json({
+            code: 200,
+            message: "成功",
+            data: categoryData
+        });
+
+    } catch (error) {
+        console.error('获取一级分类接口错误:', error);
+        res.status(500).json({
+            code: 500,
+            message: "服务器内部错误",
+            data: null
+        });
+    }
+});
 
 
 
-app.get('/index/advertisement', (req, res) => {//模拟用户数据
+// 获取首页广告接口
+app.get('/index/advertisement', (req, res) => {
+    try {
+        // 模拟广告数据
+        const advertisementData = [
+            {
+                id: 1,
+                imageUrl: "http://39.98.123.211:8300/images/love.jpg",
+                category2Id: 3
+            },
+            {
+                id: 2,
+                imageUrl: "http://39.98.123.211:8300/images/elder.jpg",
+                category2Id: 4
+            },
+            {
+                id: 3,
+                imageUrl: "http://39.98.123.211:8300/images/friend.jpg",
+                category2Id: 5
+            }
+        ];
 
-    res.json({ "code": 200, "message": "成功", "data": [{ "imageUrl": "http://39.98.123.211:8300/images/love.jpg", "category2Id": 3, "id": 1 }, { "imageUrl": "http://39.98.123.211:8300/images/elder.jpg", "category2Id": 4, "id": 2 }, { "imageUrl": "http://39.98.123.211:8300/images/friend.jpg", "category2Id": 5, "id": 3 }] })
-})
+        res.json({
+            code: 200,
+            message: "成功",
+            data: advertisementData
+        });
 
-app.get('/index/findListGoods', (req, res) => {//模拟用户数据
+    } catch (error) {
+        console.error('获取广告接口错误:', error);
+        res.status(500).json({
+            code: 500,
+            message: "服务器内部错误",
+            data: null
+        });
+    }
+});
 
-    res.json({ "code": 200, "message": "成功", "data": [{ "id": 1, "createTime": "2022-11-15 19:06:22", "updateTime": "2023-02-10 15:48:51", "isDeleted": 0, "category1Id": 1, "category2Id": 1, "name": "甜心熊-不倒翁-红色", "price": 1699.00, "marketPrice": 1999.00, "saleCount": 100, "stockCount": 10000, "imageUrl": "http://39.98.123.211:8300/images/1-1-1.png", "floralLanguage": "人间蹉跎，你是唯一值得", "applyUser": "恋人/老婆/朋友", "material": "香槟玫瑰4枝、橙色辉煌玫瑰7枝、蓝星花2枝", "packing": "粉色opp雾面纸6张、酒红色缎带2米", "isRecommend": 0, "detailList": null }, { "id": 3, "createTime": "2022-11-15 19:08:33", "updateTime": "2023-02-10 15:48:51", "isDeleted": 0, "category1Id": 1, "category2Id": 2, "name": "朱砂-经典花盒", "price": 1999.00, "marketPrice": 2399.00, "saleCount": 3789, "stockCount": 10000, "imageUrl": "http://39.98.123.211:8300/images/1-2-1.png", "floralLanguage": "永远爱你，百年好合", "applyUser": "恋人/老婆/朋友", "material": "枝卡罗拉红玫瑰", "packing": "粉色opp雾面纸6张、酒红色缎带2米", "isRecommend": 0, "detailList": null }, { "id": 4, "createTime": "2022-11-15 19:09:27", "updateTime": "2023-02-10 15:48:51", "isDeleted": 0, "category1Id": 1, "category2Id": 2, "name": "全世爱-心形", "price": 6999.00, "marketPrice": 7999.00, "saleCount": 100, "stockCount": 10000, "imageUrl": "http://39.98.123.211:8300/images/1-2-2.png", "floralLanguage": "想把你宠成公主，也想给你全部温柔", "applyUser": "恋人/老婆/朋友", "material": "香槟玫瑰4枝、橙色辉煌玫瑰7枝、蓝星花2枝", "packing": "嫣粉/玫粉色欧雅纸7张、透明雾面纸3张、白色雪梨纸2张、粉色罗纹烫金丝带2米", "isRecommend": 0, "detailList": null }, { "id": 6, "createTime": "2022-11-15 19:12:04", "updateTime": "2023-02-10 15:48:51", "isDeleted": 0, "category1Id": 1, "category2Id": 3, "name": "浪漫情人节-音乐球", "price": 1314.00, "marketPrice": 1714.00, "saleCount": 100, "stockCount": 10000, "imageUrl": "http://39.98.123.211:8300/images/1-3-1.png", "floralLanguage": "一生为你心动回旋，真爱永不止息！", "applyUser": "恋人/老婆/朋友", "material": "红玫瑰19枝，白色腊梅2枝（如腊梅无货，则用白色石竹梅或满天星代替）", "packing": "内层白底黑边丽染纸，外层深灰色雾面纸，白咖罗纹带", "isRecommend": 0, "detailList": null }, { "id": 7, "createTime": "2022-11-15 19:12:28", "updateTime": "2023-02-10 15:48:51", "isDeleted": 0, "category1Id": 1, "category2Id": 3, "name": "爱的诺言", "price": 2639.00, "marketPrice": 2939.00, "saleCount": 3908, "stockCount": 10000, "imageUrl": "http://39.98.123.211:8300/images/1-3-2.png", "floralLanguage": "再一次触动妳的心.轻启一段甜蜜的恋爱物语. 用途： 情人、生日、追求她", "applyUser": "恋人/老婆/朋友", "material": "粉红玫瑰20朵、小熊一只、羽毛", "packing": "尺寸:(高x宽)30x20cm", "isRecommend": 1, "detailList": null }, { "id": 27, "createTime": "2022-11-15 19:31:42", "updateTime": "2023-02-14 17:43:43", "isDeleted": 0, "category1Id": 3, "category2Id": 6, "name": "亲爱的/情人节网红款/19枝", "price": 1399.00, "marketPrice": 1599.00, "saleCount": 2000, "stockCount": 10000, "imageUrl": "http://39.98.123.211:8300/images/2-2-3.png", "floralLanguage": "一心一意都为你", "applyUser": "恋人/老婆/朋友", "material": "戴安娜粉玫瑰", "packing": "红金色欧雅纸7张,雪梨纸2张,红色烫金丝带蝴蝶结", "isRecommend": 0, "detailList": null }] })
-})
+// 获取商品列表接口
+app.get('/index/findListGoods', (req, res) => {
+    try {
+        // 模拟商品列表数据
+        const goodsData = [
+            {
+                id: 1,
+                createTime: "2022-11-15 19:06:22",
+                updateTime: "2023-02-10 15:48:51",
+                isDeleted: 0,
+                category1Id: 1,
+                category2Id: 1,
+                name: "甜心熊-不倒翁-红色",
+                price: 1699.00,
+                marketPrice: 1999.00,
+                saleCount: 100,
+                stockCount: 10000,
+                imageUrl: "http://39.98.123.211:8300/images/1-1-1.png",
+                floralLanguage: "人间蹉跎，你是唯一值得",
+                applyUser: "恋人/老婆/朋友",
+                material: "香槟玫瑰4枝、橙色辉煌玫瑰7枝、蓝星花2枝",
+                packing: "粉色opp雾面纸6张、酒红色缎带2米",
+                isRecommend: 0,
+                detailList: null
+            },
+            {
+                id: 3,
+                createTime: "2022-11-15 19:08:33",
+                updateTime: "2023-02-10 15:48:51",
+                isDeleted: 0,
+                category1Id: 1,
+                category2Id: 2,
+                name: "朱砂-经典花盒",
+                price: 1999.00,
+                marketPrice: 2399.00,
+                saleCount: 3789,
+                stockCount: 10000,
+                imageUrl: "http://39.98.123.211:8300/images/1-2-1.png",
+                floralLanguage: "永远爱你，百年好合",
+                applyUser: "恋人/老婆/朋友",
+                material: "枝卡罗拉红玫瑰",
+                packing: "粉色opp雾面纸6张、酒红色缎带2米",
+                isRecommend: 0,
+                detailList: null
+            },
+            {
+                id: 9,
+                createTime: "2022-11-15 19:15:34",
+                updateTime: "2023-02-10 15:48:51",
+                isDeleted: 0,
+                category1Id: 1,
+                category2Id: 3,
+                name: "台湾鲜花：红玫瑰18朵、深山樱",
+                price: 1888.00,
+                marketPrice: 1988.00,
+                saleCount: 230,
+                stockCount: 10000,
+                imageUrl: "http://39.98.123.211:8300/images/1-3-4.png",
+                floralLanguage: "坚定的情谊，传达至永远；用途： 情人、朋友、生日",
+                applyUser: "恋人/老婆/朋友",
+                material: "红玫瑰18朵、深山樱",
+                packing: "尺寸:33x25x60cm",
+                isRecommend: 0,
+                detailList: null
+            },
+            {
+                id: 15,
+                createTime: "2022-11-15 19:21:05",
+                updateTime: "2023-02-10 15:48:51",
+                isDeleted: 0,
+                category1Id: 1,
+                category2Id: 4,
+                name: "爱在心头/19枝+31枝",
+                price: 2998.00,
+                marketPrice: 3098.00,
+                saleCount: 100,
+                stockCount: 10000,
+                imageUrl: "http://39.98.123.211:8300/images/1-4-4.png",
+                floralLanguage: "\"此情无计可消除，才下眉头，却上心头。\"李清照《一剪梅》",
+                applyUser: "恋人/老婆/朋友",
+                material: "玫瑰共50枝：戴安娜粉玫瑰19枝，卡罗拉红玫瑰31枝",
+                packing: "内层白色纱网，外层粉色牛皮纸，红粉双色缎带花结",
+                isRecommend: 0,
+                detailList: null
+            },
+            {
+                id: 19,
+                createTime: "2022-11-15 19:24:40",
+                updateTime: "2023-02-14 17:43:35",
+                isDeleted: 0,
+                category1Id: 2,
+                category2Id: 5,
+                name: "用心爱你/99枝",
+                price: 2848.00,
+                marketPrice: 2948.00,
+                saleCount: 100,
+                stockCount: 10000,
+                imageUrl: "http://39.98.123.211:8300/images/2-1-1.png",
+                floralLanguage: "一心一意都为你",
+                applyUser: "恋人/老婆/朋友",
+                material: "戴安娜粉玫瑰",
+                packing: "冰淇淋包装纸1张， 白色雪梨纸3张，螺纹金丝带细，甜筒英文手提袋附带底托",
+                isRecommend: 1,
+                detailList: null
+            },
+            {
+                id: 21,
+                createTime: "2022-11-15 19:26:11",
+                updateTime: "2023-02-14 17:43:37",
+                isDeleted: 0,
+                category1Id: 2,
+                category2Id: 5,
+                name: "迪奥520999双口红款永生花礼盒/红",
+                price: 1498.00,
+                marketPrice: 1698.00,
+                saleCount: 100,
+                stockCount: 10000,
+                imageUrl: "http://39.98.123.211:8300/images/2-1-3.png",
+                floralLanguage: "一心一意都为你",
+                applyUser: "恋人/老婆/朋友",
+                material: "卡罗拉红玫瑰11枝、白色满天星3枝、尤加利10枝",
+                packing: "红色风华纸3大张、 白色小号英文插画纸（You are my love）4张、白色雪梨纸1张、酒红色罗纹烫金丝带2米",
+                isRecommend: 0,
+                detailList: null
+            }
+        ];
+
+        res.json({
+            code: 200,
+            message: "成功",
+            data: goodsData
+        });
+
+    } catch (error) {
+        console.error('获取商品列表接口错误:', error);
+        res.status(500).json({
+            code: 500,
+            message: "服务器内部错误",
+            data: null
+        });
+    }
+});
 
 
-app.get('/index/findRecommendGoods', (req, res) => {//模拟用户数据
+// 获取推荐商品接口
+app.get('/index/findRecommendGoods', (req, res) => {
+    try {
+        // 模拟推荐商品数据
+        const recommendGoodsData = [
+            {
+                id: 7,
+                createTime: "2022-11-15 19:12:28",
+                updateTime: "2023-02-10 15:48:51",
+                isDeleted: 0,
+                category1Id: 1,
+                category2Id: 3,
+                name: "爱的诺言",
+                price: 2639.00,
+                marketPrice: 2939.00,
+                saleCount: 3908,
+                stockCount: 10000,
+                imageUrl: "http://39.98.123.211:8300/images/1-3-2.png",
+                floralLanguage: "再一次触动妳的心.轻启一段甜蜜的恋爱物语. 用途： 情人、生日、追求她",
+                applyUser: "恋人/老婆/朋友",
+                material: "粉红玫瑰20朵、小熊一只、羽毛",
+                packing: "尺寸:(高x宽)30x20cm",
+                isRecommend: 1,
+                detailList: null
+            },
+            {
+                id: 3,
+                createTime: "2022-11-15 19:08:33",
+                updateTime: "2023-02-10 15:48:51",
+                isDeleted: 0,
+                category1Id: 1,
+                category2Id: 2,
+                name: "朱砂-经典花盒",
+                price: 1999.00,
+                marketPrice: 2399.00,
+                saleCount: 3789,
+                stockCount: 10000,
+                imageUrl: "http://39.98.123.211:8300/images/1-2-1.png",
+                floralLanguage: "永远爱你，百年好合",
+                applyUser: "恋人/老婆/朋友",
+                material: "枝卡罗拉红玫瑰",
+                packing: "粉色opp雾面纸6张、酒红色缎带2米",
+                isRecommend: 0,
+                detailList: null
+            },
+            {
+                id: 11,
+                createTime: "2022-11-15 19:17:29",
+                updateTime: "2023-02-10 15:48:51",
+                isDeleted: 0,
+                category1Id: 1,
+                category2Id: 3,
+                name: "深情挚爱/52枝",
+                price: 1699.00,
+                marketPrice: 1999.00,
+                saleCount: 2900,
+                stockCount: 10000,
+                imageUrl: "http://39.98.123.211:8300/images/1-3-6.png",
+                floralLanguage: "许你三生三世，可伴朝朝暮暮",
+                applyUser: "恋人/老婆/朋友",
+                material: "卡罗拉玫瑰52枝",
+                packing: "红色风华纸3大张、 白色小号英文插画纸（You are my love）4张、白色雪梨纸1张、酒红色罗纹烫金丝带2米",
+                isRecommend: 0,
+                detailList: null
+            },
+            {
+                id: 27,
+                createTime: "2022-11-15 19:31:42",
+                updateTime: "2023-02-14 17:43:43",
+                isDeleted: 0,
+                category1Id: 3,
+                category2Id: 6,
+                name: "亲爱的/情人节网红款/19枝",
+                price: 1399.00,
+                marketPrice: 1599.00,
+                saleCount: 2000,
+                stockCount: 10000,
+                imageUrl: "http://39.98.123.211:8300/images/2-2-3.png",
+                floralLanguage: "一心一意都为你",
+                applyUser: "恋人/老婆/朋友",
+                material: "戴安娜粉玫瑰",
+                packing: "红金色欧雅纸7张，雪梨纸2张，红色烫金丝带蝴蝶结",
+                isRecommend: 0,
+                detailList: null
+            },
+            {
+                id: 50,
+                createTime: "2022-11-15 19:31:42",
+                updateTime: "2023-02-10 15:48:51",
+                isDeleted: 0,
+                category1Id: 1,
+                category2Id: 2,
+                name: "亲爱的/情人节网红款/19枝",
+                price: 1399.00,
+                marketPrice: 1599.00,
+                saleCount: 2000,
+                stockCount: 10000,
+                imageUrl: "http://39.98.123.211:8300/images/2-2-3.png",
+                floralLanguage: "一心一意都为你",
+                applyUser: "恋人/老婆/朋友",
+                material: "戴安娜粉玫瑰",
+                packing: "红金色欧雅纸7张，雪梨纸2张，红色烫金丝带蝴蝶结",
+                isRecommend: 0,
+                detailList: null
+            },
+            {
+                id: 25,
+                createTime: "2022-11-15 19:30:15",
+                updateTime: "2023-02-14 17:43:40",
+                isDeleted: 0,
+                category1Id: 2,
+                category2Id: 6,
+                name: "爱莎公主99",
+                price: 3999.00,
+                marketPrice: 4199.00,
+                saleCount: 1898,
+                stockCount: 10000,
+                imageUrl: "http://39.98.123.211:8300/images/2-2-1.png",
+                floralLanguage: "想把你宠成公主，也想给你全部温柔",
+                applyUser: "恋人/老婆/朋友",
+                material: "艾莎玫瑰99枝",
+                packing: "嫣粉/玫粉色欧雅纸7张、透明雾面纸3张、白色雪梨纸2张、粉色罗纹烫金丝带2米",
+                isRecommend: 0,
+                detailList: null
+            },
+            {
+                id: 48,
+                createTime: "2022-11-15 19:30:15",
+                updateTime: "2023-02-10 16:07:10",
+                isDeleted: 0,
+                category1Id: 1,
+                category2Id: 2,
+                name: "爱莎公主.宠成公主99枝",
+                price: 3999.00,
+                marketPrice: 4199.00,
+                saleCount: 1898,
+                stockCount: 10000,
+                imageUrl: "http://39.98.123.211:8300/images/2-2-1.png",
+                floralLanguage: "想把你宠成公主，也想给你全部温柔",
+                applyUser: "恋人/老婆/朋友",
+                material: "艾莎玫瑰99枝",
+                packing: "嫣粉/玫粉色欧雅纸7张、透明雾面纸3张、白色雪梨纸2张、粉色罗纹烫金丝带2米",
+                isRecommend: 0,
+                detailList: null
+            },
+            {
+                id: 16,
+                createTime: "2022-11-15 19:22:04",
+                updateTime: "2023-02-10 15:48:51",
+                isDeleted: 0,
+                category1Id: 1,
+                category2Id: 4,
+                name: "爱你/红玫瑰香水百合小号",
+                price: 1099.00,
+                marketPrice: 1299.00,
+                saleCount: 1098,
+                stockCount: 10000,
+                imageUrl: "http://39.98.123.211:8300/images/1-4-5.png",
+                floralLanguage: "永远爱你，百年好合",
+                applyUser: "恋人/老婆/朋友",
+                material: "卡罗拉红玫瑰11枝、白色香水百合2枝、尤加利叶10枝",
+                packing: "黑色雾面纸7张、白色雪梨纸2张、酒红色罗纹烫金丝带2米",
+                isRecommend: 0,
+                detailList: null
+            },
+            {
+                id: 5,
+                createTime: "2022-11-15 19:10:28",
+                updateTime: "2023-02-10 15:48:51",
+                isDeleted: 0,
+                category1Id: 1,
+                category2Id: 2,
+                name: "99枝红玫瑰",
+                price: 5088.00,
+                marketPrice: 5388.00,
+                saleCount: 390,
+                stockCount: 10000,
+                imageUrl: "http://39.98.123.211:8300/images/1-2-3.png",
+                floralLanguage: "爱她，就送她一束99枝的玫瑰花！",
+                applyUser: "恋人/老婆/朋友",
+                material: "黑色雪梨纸，黑色条纹纸，玻璃纸卷，酒红色缎带花结",
+                packing: "红色风华纸3大张、 白色小号英文插画纸（You are my love）4张、白色雪梨纸1张、酒红色罗纹烫金丝带2米",
+                isRecommend: 0,
+                detailList: null
+            },
+            {
+                id: 2,
+                createTime: "2022-11-15 19:07:19",
+                updateTime: "2023-02-10 15:48:51",
+                isDeleted: 0,
+                category1Id: 1,
+                category2Id: 1,
+                name: "玫瑰系列-稳稳",
+                price: 1999.00,
+                marketPrice: 2399.00,
+                saleCount: 299,
+                stockCount: 10000,
+                imageUrl: "http://39.98.123.211:8300/images/1-1-2.png",
+                floralLanguage: "一心一意都为你",
+                applyUser: "恋人/老婆/朋友",
+                material: "卡罗拉红玫瑰11枝、白色满天星3枝、尤加利10枝",
+                packing: "尺寸:(高x宽)30x20cm",
+                isRecommend: 1,
+                detailList: null
+            }
+        ];
 
-    res.json({ "code": 200, "message": "成功", "data": [{ "id": 7, "createTime": "2022-11-15 19:12:28", "updateTime": "2023-02-10 15:48:51", "isDeleted": 0, "category1Id": 1, "category2Id": 3, "name": "爱的诺言", "price": 2639.00, "marketPrice": 2939.00, "saleCount": 3908, "stockCount": 10000, "imageUrl": "http://39.98.123.211:8300/images/1-3-2.png", "floralLanguage": "再一次触动妳的心.轻启一段甜蜜的恋爱物语. 用途： 情人、生日、追求她", "applyUser": "恋人/老婆/朋友", "material": "粉红玫瑰20朵、小熊一只、羽毛", "packing": "尺寸:(高x宽)30x20cm", "isRecommend": 1, "detailList": null }, { "id": 3, "createTime": "2022-11-15 19:08:33", "updateTime": "2023-02-10 15:48:51", "isDeleted": 0, "category1Id": 1, "category2Id": 2, "name": "朱砂-经典花盒", "price": 1999.00, "marketPrice": 2399.00, "saleCount": 3789, "stockCount": 10000, "imageUrl": "http://39.98.123.211:8300/images/1-2-1.png", "floralLanguage": "永远爱你，百年好合", "applyUser": "恋人/老婆/朋友", "material": "枝卡罗拉红玫瑰", "packing": "粉色opp雾面纸6张、酒红色缎带2米", "isRecommend": 0, "detailList": null }, { "id": 11, "createTime": "2022-11-15 19:17:29", "updateTime": "2023-02-10 15:48:51", "isDeleted": 0, "category1Id": 1, "category2Id": 3, "name": "深情挚爱/52枝", "price": 1699.00, "marketPrice": 1999.00, "saleCount": 2900, "stockCount": 10000, "imageUrl": "http://39.98.123.211:8300/images/1-3-6.png", "floralLanguage": "许你三生三世，可伴朝朝暮暮", "applyUser": "恋人/老婆/朋友", "material": "卡罗拉玫瑰52枝", "packing": "红色风华纸3大张、 白色小号英文插画纸（You are my love）4张、白色雪梨纸1张、酒红色罗纹烫金丝带2米", "isRecommend": 0, "detailList": null }, { "id": 27, "createTime": "2022-11-15 19:31:42", "updateTime": "2023-02-14 17:43:43", "isDeleted": 0, "category1Id": 3, "category2Id": 6, "name": "亲爱的/情人节网红款/19枝", "price": 1399.00, "marketPrice": 1599.00, "saleCount": 2000, "stockCount": 10000, "imageUrl": "http://39.98.123.211:8300/images/2-2-3.png", "floralLanguage": "一心一意都为你", "applyUser": "恋人/老婆/朋友", "material": "戴安娜粉玫瑰", "packing": "红金色欧雅纸7张，雪梨纸2张，红色烫金丝带蝴蝶结", "isRecommend": 0, "detailList": null }, { "id": 50, "createTime": "2022-11-15 19:31:42", "updateTime": "2023-02-10 15:48:51", "isDeleted": 0, "category1Id": 1, "category2Id": 2, "name": "亲爱的/情人节网红款/19枝", "price": 1399.00, "marketPrice": 1599.00, "saleCount": 2000, "stockCount": 10000, "imageUrl": "http://39.98.123.211:8300/images/2-2-3.png", "floralLanguage": "一心一意都为你", "applyUser": "恋人/老婆/朋友", "material": "戴安娜粉玫瑰", "packing": "红金色欧雅纸7张，雪梨纸2张，红色烫金丝带蝴蝶结", "isRecommend": 0, "detailList": null }, { "id": 25, "createTime": "2022-11-15 19:30:15", "updateTime": "2023-02-14 17:43:40", "isDeleted": 0, "category1Id": 2, "category2Id": 6, "name": "爱莎公主99", "price": 3999.00, "marketPrice": 4199.00, "saleCount": 1898, "stockCount": 10000, "imageUrl": "http://39.98.123.211:8300/images/2-2-1.png", "floralLanguage": "想把你宠成公主，也想给你全部温柔\r", "applyUser": "恋人/老婆/朋友", "material": "艾莎玫瑰99枝", "packing": "嫣粉/玫粉色欧雅纸7张、透明雾面纸3张、白色雪梨纸2张、粉色罗纹烫金丝带2米", "isRecommend": 0, "detailList": null }, { "id": 48, "createTime": "2022-11-15 19:30:15", "updateTime": "2023-02-10 16:07:10", "isDeleted": 0, "category1Id": 1, "category2Id": 2, "name": "爱莎公主.宠成公主99枝", "price": 3999.00, "marketPrice": 4199.00, "saleCount": 1898, "stockCount": 10000, "imageUrl": "http://39.98.123.211:8300/images/2-2-1.png", "floralLanguage": "想把你宠成公主，也想给你全部温柔\r", "applyUser": "恋人/老婆/朋友", "material": "艾莎玫瑰99枝", "packing": "嫣粉/玫粉色欧雅纸7张、透明雾面纸3张、白色雪梨纸2张、粉色罗纹烫金丝带2米", "isRecommend": 0, "detailList": null }, { "id": 16, "createTime": "2022-11-15 19:22:04", "updateTime": "2023-02-10 15:48:51", "isDeleted": 0, "category1Id": 1, "category2Id": 4, "name": "爱你/红玫瑰香水百合小号", "price": 1099.00, "marketPrice": 1299.00, "saleCount": 1098, "stockCount": 10000, "imageUrl": "http://39.98.123.211:8300/images/1-4-5.png", "floralLanguage": "永远爱你，百年好合", "applyUser": "恋人/老婆/朋友", "material": "卡罗拉红玫瑰11枝、白色香水百合2枝、尤加利叶10枝", "packing": "黑色雾面纸7张、白色雪梨纸2张、酒红色罗纹烫金丝带2米", "isRecommend": 0, "detailList": null }, { "id": 5, "createTime": "2022-11-15 19:10:28", "updateTime": "2023-02-10 15:48:51", "isDeleted": 0, "category1Id": 1, "category2Id": 2, "name": "99枝红玫瑰", "price": 5088.00, "marketPrice": 5388.00, "saleCount": 390, "stockCount": 10000, "imageUrl": "http://39.98.123.211:8300/images/1-2-3.png", "floralLanguage": "爱她，就送她一束99枝的玫瑰花！", "applyUser": "恋人/老婆/朋友", "material": "黑色雪梨纸，黑色条纹纸，玻璃纸卷，酒红色缎带花结", "packing": "红色风华纸3大张、 白色小号英文插画纸（You are my love）4张、白色雪梨纸1张、酒红色罗纹烫金丝带2米", "isRecommend": 0, "detailList": null }, { "id": 2, "createTime": "2022-11-15 19:07:19", "updateTime": "2023-02-10 15:48:51", "isDeleted": 0, "category1Id": 1, "category2Id": 1, "name": "玫瑰系列-稳稳", "price": 1999.00, "marketPrice": 2399.00, "saleCount": 299, "stockCount": 10000, "imageUrl": "http://39.98.123.211:8300/images/1-1-2.png", "floralLanguage": "一心一意都为你", "applyUser": "恋人/老婆/朋友", "material": "卡罗拉红玫瑰11枝、白色满天星3枝、尤加利10枝", "packing": "尺寸:(高x宽)30x20cm", "isRecommend": 1, "detailList": null }] })
-})
+        res.json({
+            code: 200,
+            message: "成功",
+            data: recommendGoodsData
+        });
+
+    } catch (error) {
+        console.error('获取推荐商品接口错误:', error);
+        res.status(500).json({
+            code: 500,
+            message: "服务器内部错误",
+            data: null
+        });
+    }
+});
 
 app.get('/index/findCategoryTree', (req, res) => {//模拟用户数据
 
@@ -224,6 +1004,12 @@ app.listen(PORT, () => {
     console.log('POST/api/users: 创建用户');
     console.log('POST/api/login: 用户登录');
     console.log('GET/weixin/wxLogin/:code: 微信登录');
+    console.log('图片上传相关接口:');
+    console.log('POST/api/upload/single: 上传单张图片');
+    console.log('POST/api/upload/wechat: 微信小程序图片上传');
+    console.log('POST/api/upload/multiple: 上传多张图片');
+    console.log('GET/api/upload/list: 获取图片列表');
+    console.log('DELETE/api/upload/:filename: 删除指定图片');
 });
 
 

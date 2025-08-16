@@ -46,11 +46,37 @@ jspm_packages/
 # dotenv environment variables file
 .env
 
-# IDE files
-.vscode/
-.idea/
-*.swp
-*.swo
+# parcel-bundler cache
+.cache
+.parcel-cache
+
+# next.js build output
+.next
+
+# nuxt.js build output
+.nuxt
+
+# vuepress build output
+.vuepress/dist
+
+# Serverless directories
+.serverless
+
+# FuseBox cache
+.fusebox/
+
+# DynamoDB Local files
+.dynamodb/
+
+# TernJS port file
+.tern-port
+
+# Upload files - 忽略上传的文件
+assets/images/upload/
+
+# Logs
+logs
+*.log
 
 # OS generated files
 .DS_Store
@@ -59,4 +85,15 @@ jspm_packages/
 .Spotlight-V100
 .Trashes
 ehthumbs.db
-Thumbs.db 
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.temp 

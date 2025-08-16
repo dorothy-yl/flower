@@ -14,5 +14,11 @@ module.exports = {
     // JWT配置
     jwt: {
         secret: process.env.JWT_SECRET || '123456'
+    },
+    
+    // 图片服务配置
+    images: {
+        path: '/assets/images/upload',
+        directory: './assets/images/upload'
     }
 }; 
